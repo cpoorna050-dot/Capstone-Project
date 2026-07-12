@@ -14,9 +14,21 @@ SCRIP_DIR = os.path.dirname(os.path.abspath(__file__))
 # LLM API CONFIG — key read from environment, NEVER hardcoded
 # ---------------------------------------------------------------------------
 
-LLM_API_KEY = os.environ.get("LLM_API_KEY") 
-LLM_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-LLM_MODEL = "google/gemma-4-31b-it:free"
+def get_llm_api_key():
+    for key_name in ("LLM_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
+        value = os.environ.get(key_name)
+        if value:
+            return value
+    return None
+
+
+def get_llm_model():
+    return os.environ.get("LLM_MODEL") or "openai/gpt-4o-mini"
+
+
+LLM_API_KEY = get_llm_api_key()
+LLM_API_URL = os.environ.get("LLM_API_URL", "https://openrouter.ai/api/v1/chat/completions")
+LLM_MODEL = get_llm_model()
 
 
 def section(title):
@@ -27,45 +39,61 @@ def section(title):
 # ---------------------------------------------------------------------------
 # TASK: Set up the LLM API connection
 # ---------------------------------------------------------------------------
-def call_llm(system_prompt, user_prompt, temperature = 0.0, max_tokens= 512, max_retries= 3):
+def call_llm(system_prompt, user_prompt, temperature=0.0, max_tokens=512, max_retries=3):
     if not LLM_API_KEY:
-        print("LLM_API_KEY environment variable is not set - cannot call the LLM. ")
+        print("No LLM API key found in environment variables (checked LLM_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY).")
         return None
-    
-    payload = {
-        "model": LLM_MODEL,
-        "messages" : [{"role": "system", "content": system_prompt},
-                     {"role": "user", "content": user_prompt}
-                     ],
-        "temperature" : temperature,
-        "max_tokens" : max_tokens,
-        }
-    
+
+    model_candidates = []
+    if LLM_MODEL:
+        model_candidates.append(LLM_MODEL)
+    if LLM_MODEL != "openai/gpt-4o-mini":
+        model_candidates.append("openai/gpt-4o-mini")
+    if "meta-llama/llama-3.1-8b-instruct:free" not in model_candidates:
+        model_candidates.append("meta-llama/llama-3.1-8b-instruct:free")
+
     headers = {
         "Authorization": f"Bearer {LLM_API_KEY}",
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/",
+        "X-Title": "capstone-attrition-demo",
     }
 
-    for attempt in range(max_retries):
-        response = requests.post(LLM_API_URL, headers=headers, json=payload)
+    for model_name in model_candidates:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
 
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(LLM_API_URL, headers=headers, json=payload, timeout=60)
+            except requests.RequestException as exc:
+                print(f"LLM request exception: {exc}")
+                return None
 
-        if response.status_code == 429 and attempt < max_retries - 1:
-            print(f"Rate limited — waiting 8 seconds (attempt {attempt + 1}/{max_retries})...")
-            time.sleep(8)
-            continue
-        print(f"LLM API call failed - status code: {response.status_code}")
-        print(response.text[:500])
-        return None
-    
-    if response.status_code != 200:
-        print(f"LLM API call failed - status code:{response.status_code}") 
-        print(response.text[:500])
-        return None
-    
-    return response.json()["choices"][0]["message"]["content"]
+            if response.status_code == 200:
+                return response.json()["choices"][0]["message"]["content"]
+
+            if response.status_code == 429 and attempt < max_retries - 1:
+                print(f"Rate limited on {model_name} — waiting 8 seconds (attempt {attempt + 1}/{max_retries})...")
+                time.sleep(8)
+                continue
+
+            if response.status_code == 429 and model_name != model_candidates[-1]:
+                print(f"{model_name} is rate limited; trying fallback model...")
+                break
+
+            print(f"LLM API call failed - status code: {response.status_code}")
+            print(response.text[:500])
+            return None
+
+    return None
 
 # ---------------------------------------------------------------------------
 # TASK: PII guardrail
@@ -109,7 +137,7 @@ FALLBACK_EXPLANATION = {
 
 def parse_and_validate(raw_response):
     if raw_response is None:
-        return dict(FALLBACK_EXPLANATION),
+        return dict(FALLBACK_EXPLANATION), "Fail"
 
     cleaned = raw_response.strip()
     if cleaned.startswith("```"):
@@ -121,13 +149,13 @@ def parse_and_validate(raw_response):
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as e:
         print(f"JSON Decode error : {e}")
-        return dict(FALLBACK_EXPLANATION),
+        return dict(FALLBACK_EXPLANATION), "Fail"
 
     try:
         jsonschema.validate(instance=parsed, schema=EXPLANATION_SCHEMA)
     except jsonschema.ValidationError as e:
         print(f"Schema Validation Error:{e.message}")
-        return dict(FALLBACK_EXPLANATION),
+        return dict(FALLBACK_EXPLANATION), "Fail"
 
     return parsed, "Pass"
 
@@ -138,19 +166,20 @@ def encode_record(feature_dict, reference_columns):
 
     row = pd.DataFrame([feature_dict])
 
-    travel_order = {"Not_Travel": 0, "Travel_Rarely": 1,"Travel_Freaquently": 2}
-    if "Business_Travel" in row.columns:
+    travel_order = {"Non-Travel": 0, "Travel_Frequently": 1, "Travel_Rarely": 2}
+    if "BusinessTravel" in row.columns:
+        row["BusinessTravel"] = row["BusinessTravel"].map(travel_order)
+    elif "Business_Travel" in row.columns:
         row["Business_Travel"] = row["Business_Travel"].map(travel_order)
 
     if "OverTime" in row.columns:
-        row["OverTime"] = row["OverTime"].map({"No":0, "Yes": 1})
+        row["OverTime"] = row["OverTime"].map({"No": 0, "Yes": 1})
 
-    nominal_columns = [c for c in ["Department","EducationField","Gender",
-                                   "JobRole","MaritalStatus","Over18"]
-                       if c in row.columns
-    ]
+    nominal_columns = [c for c in ["Department", "EducationField", "Gender",
+                                   "JobRole", "MaritalStatus", "Over18"]
+                       if c in row.columns]
 
-    row = pd.get_dummies(row,columns=nominal_columns,drop_first=True)
+    row = pd.get_dummies(row, columns=nominal_columns, drop_first=True)
 
     row = row.reindex(columns=reference_columns, fill_value=0)
     return row
@@ -191,19 +220,26 @@ if csv_path is None:
 df_ref = pd.read_csv(csv_path)
 X_ref = df_ref.drop(columns=["MonthlyIncome","Attrition"])
 
-travel_order = {"Not_Travel":0, "Travel_Rarely": 1, "Travel_Frequently": 2}
-if "Business_Travel" in X_ref.columns:
+travel_order = {"Non-Travel": 0, "Travel_Frequently": 1, "Travel_Rarely": 2}
+if "BusinessTravel" in X_ref.columns:
+    X_ref["BusinessTravel"] = X_ref["BusinessTravel"].map(travel_order)
+elif "Business_Travel" in X_ref.columns:
     X_ref["Business_Travel"] = X_ref["Business_Travel"].map(travel_order)
 
 if "OverTime" in X_ref.columns:
-    X_ref["OverTime"] = X_ref["OverTime"].map({"No":0, "Yes":1})
+    X_ref["OverTime"] = X_ref["OverTime"].map({"No": 0, "Yes": 1})
 
-nominal_cols = (c for c in ["Department","EducationField","Gender",
-                            "MaritalStatus","JobRole","Over18"]
-                            if c in X_ref.columns)
+nominal_cols = [c for c in ["Department", "EducationField", "Gender",
+                            "MaritalStatus", "JobRole", "Over18"]
+                if c in X_ref.columns]
 
-X_ref = pd.get_dummies(X_ref,columns=nominal_cols,drop_first=True)
-REFERENCE_COLUMNS = X_ref.columns.to_list()
+X_ref = pd.get_dummies(X_ref, columns=nominal_cols, drop_first=True)
+
+if hasattr(best_model, "feature_names_in_"):
+    REFERENCE_COLUMNS = list(best_model.feature_names_in_)
+else:
+    REFERENCE_COLUMNS = X_ref.columns.to_list()
+
 print(f"REFERENCE FEATURE COLUMNS: {len(REFERENCE_COLUMNS)}")
 
 # ---------------------------------------------------------------------------
@@ -260,10 +296,10 @@ Output ONLY valid JSON with exactly these 5 fields, nothing less or markdown fen
 
 
 USER_PROMPT_TEMPLATE = """Employee feature values:{feature_values}
-Model prediction: {prediction_class_label} (predicted class ={predicted_class})
+Model prediction: {predicted_class_label} (predicted class ={predicted_class})
 Predicted probability of attrition: {predicted_probability:.4f}
 
-Provode structured JSON explanatyion now."""
+Provide structured JSON explanation now."""
 
 # ---------------------------------------------------------------------------
 # TASK: Three hand-crafted feature-vector inputs
