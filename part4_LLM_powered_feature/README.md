@@ -67,6 +67,32 @@ The script tested three hand-crafted employee profiles and produced the followin
 | 2 | JobRole=Research Director, OverTime=No | 0 | 0.0599 | Pass | Likely to stay; long tenure and high satisfaction were highlighted as main reasons. |
 | 3 | JobRole=Laboratory Technician, OverTime=No | 0 | 0.0421 | Pass | Likely to stay; stable tenure and moderate satisfaction were highlighted as main reasons. |
 
+### Verified example outputs
+
+- Employee 1
+  - Predicted class: 1 (Attrition will leave)
+  - Predicted probability: 0.6872
+  - Explanation: "At risk of leaving" with low job satisfaction and low environment satisfaction as the main reasons.
+
+- Employee 2
+  - Predicted class: 0 (No attrition)
+  - Predicted probability: 0.0599
+  - Explanation: "Likely to stay" with long tenure and high satisfaction as the dominant reasons.
+
+- Employee 3
+  - Predicted class: 0 (No attrition)
+  - Predicted probability: 0.0421
+  - Explanation: "Likely to stay" with stable tenure and moderate satisfaction as the main reasons.
+
+### Temperature comparison (temperature 0.0 vs 0.7)
+The same three employee prompts were run at both temperatures to compare response stability.
+
+| Employee | temp=0.0 | temp=0.7 |
+|---|---|---|
+| 1 | At risk of leaving; emphasized low job satisfaction and low relationship satisfaction. | At risk of leaving; emphasized low job satisfaction and work-life balance stress. |
+| 2 | Likely to stay; emphasized long tenure and high satisfaction. | Likely to stay; emphasized high job and relationship satisfaction. |
+| 3 | Likely to stay; emphasized stable tenure and moderate satisfaction. | Likely to stay; emphasized stable work history and healthy work-life balance. |
+
 ## Guardrail Test Results
 A simple input guardrail was implemented to block prompts containing personally identifiable information (PII).
 
