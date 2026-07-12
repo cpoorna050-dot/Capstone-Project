@@ -298,7 +298,7 @@ print(learning_curve_table.to_string(index=False))
 # ---------------------------------------------------------------------------
 section("TASK 7: Serialize the best model")
 
-model_path = os.path.join(SCIRIP_DIR,"best_model.apk1")
+model_path = os.path.join(SCIRIP_DIR,"best_model.pk1")
 joblib.dump(best_pipeline,model_path)
 print(f"Saved best pipeline to : {model_path}")
 

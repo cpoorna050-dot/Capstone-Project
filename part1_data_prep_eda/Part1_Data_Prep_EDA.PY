@@ -8,7 +8,7 @@ import kagglehub
 
 
 sns.set_style('whitegrid')
-plt.rcParams['figure.figsize'] = (9, 6)
+plt.rcParams['figure.figsize'] = (14,11)
 
 KAGGELE_DATASET = "pavansubhasht/ibm-hr-analytics-attrition-dataset"
 CSV_FILENAME = "WA_Fn-UseC_-HR-Employee-Attrition.csv"
@@ -223,7 +223,7 @@ print(f"Saved bar chart: plots/2_bar_chart.png")
 
 # 3. Histogram of most skewed column
 plt.figure()
-sns.histplot(df[top_skew_col],bin=20, kde=True)
+sns.histplot(df[top_skew_col], bins=20, kde=True)
 plt.title(f"Histogram of Most Skewed Column: {top_skew_col}")
 plt.xlabel(top_skew_col)
 plt.ylabel("Frequency")
@@ -270,3 +270,77 @@ top_pair = corr_unstacked.sort_values(ascending=False).index[0]
 top_corr_val = corr_matrix.loc[top_pair[0], top_pair[1]]
 print(f"\nHighest |correlation| pair: {top_pair} = {top_corr_val:.3f}")
 
+# ---------------------------------------------------------------------------
+# TASK 8a: Imputation strategy comparison (mean vs median) on top-2 skewed cols
+# ---------------------------------------------------------------------------
+
+section("TASK 8a: Imputation strategy comparison (mean vs median) on top-2 skewed cols")
+top2_skew_cols = skew_vals.index[:2].to_list()
+
+for col in top2_skew_cols:
+   mean = df[col].mean()
+   median = df[col].median()
+   print(f"Column: {col}, Mean: {mean:.2f}, Median: {median:.2f}"
+         f"| skew = {skew_vals[col]:.3f}")
+
+# Apply chosen strategy: median (robust to skew) for any remaining nulls
+if df[col].isnull().sum() > 0:
+      df[col] = df[col].fillna(median)
+print(f"  -> Nulls remaining in '{col}' after imputation: {df[col].isnull().sum()}")
+
+ 
+# ---------------------------------------------------------------------------
+# TASK 8b: Spearman vs Pearson correlation
+# ---------------------------------------------------------------------------
+section("TASK 8b: SPEARMAN VS PEARSON CORRELATION")
+pearson_corr = df[numeric_cols].corr(method="pearson")
+spearman_corr = df[numeric_cols].corr(method="spearman")
+ 
+diff = (spearman_corr - pearson_corr).abs()
+diff_unstacked = diff.unstack()
+diff_unstacked = diff_unstacked[diff_unstacked.index.get_level_values(0)
+                                 != diff_unstacked.index.get_level_values(1)]
+# each pair appears twice (a,b) and (b,a) -> dedupe
+diff_unstacked = diff_unstacked.reset_index()
+diff_unstacked.columns = ["col1", "col2", "abs_diff"]
+diff_unstacked["pair_key"] = diff_unstacked.apply(
+    lambda r: tuple(sorted([r["col1"], r["col2"]])), axis=1
+)
+diff_unstacked = diff_unstacked.drop_duplicates("pair_key")
+top3_diff_pairs = diff_unstacked.sort_values("abs_diff", ascending=False).head(3)
+ 
+print("Pearson correlation matrix (head):")
+print(pearson_corr.iloc[:5, :5])
+print("\nSpearman correlation matrix (head):")
+print(spearman_corr.iloc[:5, :5])
+ 
+print("\nTop 3 pairs with largest |Spearman - Pearson| difference:")
+print(top3_diff_pairs[["col1", "col2", "abs_diff"]])
+
+# ---------------------------------------------------------------------------
+# TASK 8c: Grouped aggregation
+# ---------------------------------------------------------------------------
+section("TASK 8c: GROUPED AGGREGATION")
+group_cat_col = "JobRole" if "JobRole" in df.columns else box_cat_col
+group_num_col = "MonthlyIncome" if "MonthlyIncome" in df.columns else numeric_cols[0]
+ 
+grouped_stats = df.groupby(group_cat_col, observed=True)[group_num_col].agg(
+    ["mean", "std", "count"]
+)
+print(grouped_stats)
+ 
+highest_mean_group = grouped_stats["mean"].idxmax()
+highest_std_group = grouped_stats["std"].idxmax()
+mean_ratio = grouped_stats["mean"].max() / grouped_stats["mean"].min()
+ 
+print(f"\nGroup with highest mean {group_num_col}: {highest_mean_group}")
+print(f"Group with highest std {group_num_col}: {highest_std_group}")
+print(f"Ratio of highest group mean to lowest group mean: {mean_ratio:.2f}")
+
+# ---------------------------------------------------------------------------
+# TASK 9: Save cleaned dataset
+# ---------------------------------------------------------------------------
+section("TASK 9: SAVE CLEANED DATASET")
+
+df.to_csv("Cleaned_data.CSV", index=False)
+print("cleaned Csv saved - shape:", df.shape)
